@@ -47,7 +47,7 @@ greeter_server: helloworld.pb.o helloworld.grpc.pb.o greeter_server.o
 greeter_async_client: helloworld.pb.o helloworld.grpc.pb.o greeter_async_client.o
 	$(CXX) $^ $(LDFLAGS) -o $@
 
-greeter_async_client2: helloworld.pb.o helloworld.grpc.pb.o greeter_async_client2.o
+greeter_async_client2: helloworld.pb.o helloworld.grpc.pb.o greeter_async_client2.o grpc_util.o
 	$(CXX) $^ $(LDFLAGS) -o $@
 
 greeter_async_server: helloworld.pb.o helloworld.grpc.pb.o greeter_async_server.o

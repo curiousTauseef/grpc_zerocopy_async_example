@@ -29,6 +29,8 @@
 
 #include "helloworld.grpc.pb.h"
 
+#include "grpc_util.h"
+
 using grpc::Channel;
 using grpc::ClientAsyncResponseReader;
 using grpc::ClientContext;
@@ -43,13 +45,36 @@ void* GenPayload(const size_t size) {
     return data;
 }
 
-// bool GrpcParseProto(const ::grpc::ByteBuffer& src, TensorResponse* dst) {
+void RequestToByteBuffer(const HelloRequest& proto,
+                         ::grpc::ByteBuffer* result) {
+  ::grpc::Slice slice(proto.ByteSizeLong());
+  proto.SerializeWithCachedSizesToArray(
+      const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(slice.begin())));
+  ::grpc::ByteBuffer tmp(&slice, 1);
+  result->Swap(&tmp);
+}
+
+
+// bool GrpcParseProto(const grpc::ByteBuffer& src, protobuf::Message* dst) {
+//   GrpcByteBufferSource stream;
+//   if (!stream.Init(src)) return false;
+//   return dst->ParseFromZeroCopyStream(&stream);
+// }
+
+bool GrpcParseProto(const grpc::ByteBuffer& src, HelloReply* dst) {
+  GrpcByteBufferSource stream;
+  if (!stream.Init(src)) return false;
+  return dst->ParseFromZeroCopyStream(&stream);
+}
+
+// bool GrpcParseProto(const ::grpc::ByteBuffer& src,
+//                     HelloReply* dst) {
 //   struct ByteSource : public TensorResponse::Source {
 //     const ::grpc::ByteBuffer* buffer;
 //     GrpcByteBufferSource src;
 //     bool ok;
 
-//     ::tensorflow::protobuf::io::ZeroCopyInputStream* contents() override {
+//     ::protobuf::io::ZeroCopyInputStream* contents() {
 //       ok = src.Init(*buffer);
 //       return &src;
 //     }
@@ -61,8 +86,16 @@ void* GenPayload(const size_t size) {
 
 class AsyncClientCallDirect {
  public:
-  AsyncClientCallDirect(::grpc::CompletionQueue* cq,
+  AsyncClientCallDirect(const std::string& user,
+                        ::grpc::CompletionQueue* cq,
                         ::grpc::GenericStub* stub) {
+    // encode a message directly
+    HelloRequest request;
+    request.set_name(user);
+    auto* pl = request.mutable_payload();
+    pl = reinterpret_cast<std::string*>(GenPayload(1024*1024*8));
+    RequestToByteBuffer(request, &request_buf_);
+    
     call_ = std::move(stub->Call(&context_, "/helloworld.Greeter/SayHello", cq, this));
     call_times = 0;
     std::cout << "create new call" << std::endl;
@@ -78,17 +111,17 @@ class AsyncClientCallDirect {
         std::unique_lock<std::mutex> lock(mu_);
         cond_.wait(lock, [this]{return this->call_cond_ == 1;});
 
-        std::cout << "begin write" << std::endl;
         call_->Write(request_buf_, this);
-        std::cout << "begin read" << std::endl;
         call_->Read(&response_buf_, this);
-        std::cout << "begin finish" << std::endl;
         call_->Finish(&status, this);
         lock.unlock();
       } else {
         // parse response_buf_
         if (status.ok()) {
-            std::cout << "call end ok" << response_buf_.Length() << std::endl;
+            HelloReply reply;
+            GrpcParseProto(response_buf_, &reply);
+            std::cout << "call end ok: " << response_buf_.Length() << std::endl;
+            std::cout << "reply: " << reply.message() << std::endl;
         } else {
             std::cout << "call end error";
         }
@@ -112,36 +145,14 @@ class AsyncClientCallDirect {
     int call_cond_ = 0;
 };
 
-void EncodeBytes(char* p, const char* bytes, int N) {
-    memcpy(p, bytes, N);
-}
-
-void RequestToByteBuffer(const HelloRequest& proto,
-                         ::grpc::ByteBuffer* result) {
-  ::grpc::Slice slice(proto.ByteSizeLong());
-  proto.SerializeWithCachedSizesToArray(
-      const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(slice.begin())));
-  ::grpc::ByteBuffer tmp(&slice, 1);
-  result->Swap(&tmp);
-}
 
 class GreeterClient {
   public:
     explicit GreeterClient(std::shared_ptr<Channel> channel)
             : stub_(Greeter::NewStub(channel)), g_stub_(channel) {}
 
-    void GenByteBufferMsg(const std::string& user,
-                          ::grpc::ByteBuffer* result) {
-        // encode a message directly
-        HelloRequest request;
-        request.set_name(user);
-        auto* pl = request.mutable_payload();
-        pl = reinterpret_cast<std::string*>(GenPayload(1024*1024*8));
-        RequestToByteBuffer(request, result);
-    }
     void SayHelloDirect(const std::string& user) {
-        AsyncClientCallDirect* call = new AsyncClientCallDirect(&cq_, &g_stub_);
-        // call->OnComplete();
+        AsyncClientCallDirect* call = new AsyncClientCallDirect(user, &cq_, &g_stub_);
     }
 
     // Assembles the client's payload and sends it to the server.
