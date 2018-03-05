@@ -1,3 +1,5 @@
+NOTE: this is copied from https://github.com/grpc/grpc/examples/cpp to show how to use zerocopy transfer.
+
 # gRPC C++ Hello World Tutorial
 
 ### Install gRPC
