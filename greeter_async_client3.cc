@@ -68,11 +68,6 @@ bool GrpcParseProto(const grpc::ByteBuffer& src, HelloReply* dst) {
   return dst->ParseFromZeroCopyStream(&stream);
 }
 
-inline int64_t GetTimestamp() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-    std::chrono::system_clock::now().time_since_epoch())
-    .count();
-}
 
 class AsyncClientCallDirect {
  public:
@@ -190,7 +185,7 @@ int main(int argc, char** argv) {
     // Spawn reader thread that loops indefinitely
     std::thread thread_ = std::thread(&GreeterClient::AsyncCompleteRpc, &greeter);
 
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 100; i++) {
         std::string user("world " + std::to_string(i));
         greeter.SayHelloDirect(user);  // The actual RPC call!
     }

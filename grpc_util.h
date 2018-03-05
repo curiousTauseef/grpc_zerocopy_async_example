@@ -2,6 +2,12 @@
 #include "grpc++/impl/codegen/proto_utils.h"
 #include "grpc++/support/byte_buffer.h"
 
+inline int64_t GetTimestamp() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::system_clock::now().time_since_epoch())
+    .count();
+}
+
 // A ZeroCopyInputStream that reads from a grpc::ByteBuffer.
 class GrpcByteBufferSource : public ::grpc::protobuf::io::ZeroCopyInputStream {
  public:

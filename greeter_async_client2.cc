@@ -26,6 +26,8 @@
 
 #include "helloworld.grpc.pb.h"
 
+#include "grpc_util.h"
+
 using grpc::Channel;
 using grpc::ClientAsyncResponseReader;
 using grpc::ClientContext;
@@ -35,6 +37,13 @@ using helloworld::HelloRequest;
 using helloworld::HelloReply;
 using helloworld::Greeter;
 
+void* GenPayload(const size_t size) {
+    void* data = malloc(size);
+    return data;
+}
+
+int64_t ts;
+
 class GreeterClient {
   public:
     explicit GreeterClient(std::shared_ptr<Channel> channel)
@@ -42,12 +51,19 @@ class GreeterClient {
 
     // Assembles the client's payload and sends it to the server.
     void SayHello(const std::string& user) {
-        // Data we are sending to the server.
-        HelloRequest request;
-        request.set_name(user);
+        void* payload_alloc = GenPayload(1024*1024*200);
 
         // Call object to store rpc data
         AsyncClientCall* call = new AsyncClientCall;
+        call->start_time_ = GetTimestamp();
+
+        // Data we are sending to the server.
+        HelloRequest request;
+        request.set_name(user);
+        request.set_payload(*reinterpret_cast<std::string*>(payload_alloc));
+        // auto* pl = request.mutable_payload();
+        // pl = reinterpret_cast<std::string*>(payload_alloc);
+        free(payload_alloc);
 
         // stub_->PrepareAsyncSayHello() creates an RPC object, returning
         // an instance to store in "call" but does not actually start the RPC
@@ -71,6 +87,7 @@ class GreeterClient {
     void AsyncCompleteRpc() {
         void* got_tag;
         bool ok = false;
+        int cq_count = 0;
 
         // Block until the next result is available in the completion queue "cq".
         while (cq_.Next(&got_tag, &ok)) {
@@ -82,12 +99,18 @@ class GreeterClient {
             GPR_ASSERT(ok);
 
             if (call->status.ok())
-                std::cout << "Greeter received: " << call->reply.message() << std::endl;
+                std::cout << "Greeter received: " << call->reply.message()
+                          << " timespent " << GetTimestamp() - call->start_time_ << std::endl;
             else
                 std::cout << "RPC failed" << std::endl;
 
+            if (cq_count == 99) {
+                std::cout << "total " << GetTimestamp() - ts << std::endl;
+            }
+
             // Once we're complete, deallocate the call object.
             delete call;
+            cq_count++;
         }
     }
 
@@ -104,6 +127,8 @@ class GreeterClient {
 
         // Storage for the status of the RPC upon completion.
         Status status;
+
+        int64_t start_time_;
 
 
         std::unique_ptr<ClientAsyncResponseReader<HelloReply>> response_reader;
@@ -130,6 +155,7 @@ int main(int argc, char** argv) {
 
     // Spawn reader thread that loops indefinitely
     std::thread thread_ = std::thread(&GreeterClient::AsyncCompleteRpc, &greeter);
+    ts = GetTimestamp();
 
     for (int i = 0; i < 100; i++) {
         std::string user("world " + std::to_string(i));
