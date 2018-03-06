@@ -39,8 +39,8 @@ using helloworld::HelloReply;
 using helloworld::Greeter;
 
 void* GenPayload(const size_t size) {
-    void* data = malloc(size);
-    return data;
+    std::cout << "alloc " << size << std::endl;
+    return malloc(size);
 }
 
 int64_t ts;
@@ -52,29 +52,21 @@ class GreeterClient {
 
     // Assembles the client's payload and sends it to the server.
     void SayHello(const std::string& user) {
-        const int size = 12 * 1024 * 1024;
+        const int size = 3 * 1024 * 1024;
         char* payload_alloc = (char*)GenPayload(size);
 
-        struct timeval t0_copy, t1_copy;
-        gettimeofday(&t0_copy, 0);
-        //std::string pay_load(payload_alloc, size);
+        double ts = GetTimestamp();
 
         // Call object to store rpc data
         AsyncClientCall* call = new AsyncClientCall;
-        call->start_time_ = GetTimestamp();
 
         // Data we are sending to the server.
         HelloRequest request;
         request.set_name(user);
         request.set_payload(payload_alloc, size);
 
-        gettimeofday(&t1_copy, 0);
-        double dif = double((t1_copy.tv_sec - t0_copy.tv_sec) * 1000.0 +
-                         (t1_copy.tv_usec - t0_copy.tv_usec) / 1000.0);
-        printf("time is %.2f ms\n", dif);
+        printf("time is %.2f ms\n", GetTimestamp() - ts);
 
-        // auto* pl = request.mutable_payload();
-        // pl = reinterpret_cast<std::string*>(payload_alloc);
         free(payload_alloc);
 
         // stub_->PrepareAsyncSayHello() creates an RPC object, returning
@@ -111,8 +103,7 @@ class GreeterClient {
             GPR_ASSERT(ok);
 
             if (call->status.ok())
-                std::cout << "Greeter received: " << call->reply.message()
-                          << " timespent " << GetTimestamp() - call->start_time_ << std::endl;
+                std::cout << "Greeter received: " << call->reply.message() << std::endl;
             else
                 std::cout << "RPC failed" << std::endl;
 
@@ -139,8 +130,6 @@ class GreeterClient {
 
         // Storage for the status of the RPC upon completion.
         Status status;
-
-        int64_t start_time_;
 
 
         std::unique_ptr<ClientAsyncResponseReader<HelloReply>> response_reader;

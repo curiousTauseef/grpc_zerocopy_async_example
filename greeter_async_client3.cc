@@ -20,7 +20,6 @@
 #include <memory>
 #include <string>
 #include <atomic>
-#include <sys/time.h>
 
 #include <grpc++/generic/generic_stub.h>
 #include <grpc++/grpc++.h>
@@ -43,8 +42,11 @@ using helloworld::HelloReply;
 using helloworld::Greeter;
 
 void* GenPayload(const size_t size) {
-    void* data = malloc(size);
-    return data;
+    std::string* ret = new std::string();
+    ret->reserve(size);
+    std::cout << "alloc " << ret->capacity() << std::endl;
+    for (int i=0; i<size; ++i) ret->append("x");
+    return ret;
 }
 
 void RequestToByteBuffer(const HelloRequest& proto,
@@ -77,27 +79,19 @@ class AsyncClientCallDirect {
                         ::grpc::CompletionQueue* cq,
                         ::grpc::GenericStub* stub) {
     // encode a message directly
-    // void* payload_alloc = GenPayload(1024*1024*12);
-    
-      const int size = 12 * 1024 * 1024;
-      char* payload_alloc = (char*)GenPayload(size);
+    const int size = 3 * 1024 * 1024;
+    char* payload_alloc = (char*)GenPayload(size);
 
-      struct timeval t0_copy, t1_copy;
-      gettimeofday(&t0_copy, 0);
-      //std::string pay_load(payload_alloc, size);
-
-
-    start_time_ = GetTimestamp();
+    double ts = GetTimestamp();
     HelloRequest request;
     request.set_name(user);
-    auto* pl = request.mutable_payload();
-    pl = reinterpret_cast<std::string*>(payload_alloc);
+    // This will copy, 
+    request.set_allocated_payload(reinterpret_cast<std::string*>(payload_alloc));
+    // auto* pl = request.mutable_payload();
+    // this have no affect
+    // pl = reinterpret_cast<std::string*>(payload_alloc);
     RequestToByteBuffer(request, &request_buf_);
-
-    gettimeofday(&t1_copy, 0);
-    double dif = double((t1_copy.tv_sec - t0_copy.tv_sec) * 1000.0 +
-            (t1_copy.tv_usec - t0_copy.tv_usec) / 1000.0);
-    printf("time is %.2f ms\n", dif);
+    printf("time is %.2f ms\n", GetTimestamp() - ts);
 
     
     call_ = std::move(stub->Call(&context_, "/helloworld.Greeter/SayHello", cq, this));
@@ -109,7 +103,6 @@ class AsyncClientCallDirect {
     cond_.notify_one();
   }
   void OnComplete(bool ok) {
-      // std::cout << "call times: " << call_times << std::endl;
       if (call_times == 0) {
         std::unique_lock<std::mutex> lock(mu_);
         cond_.wait(lock, [this]{return this->call_cond_ == 1;});
@@ -124,12 +117,8 @@ class AsyncClientCallDirect {
         if (status.ok()) {
             HelloReply reply;
             GrpcParseProto(response_buf_, &reply);
-            //std::cout << "call end ok: " << response_buf_.Length() << std::endl;
-            //std::cout << "reply: " << reply.message() << " timespent: "
-             //         << GetTimestamp() - start_time_
-                      //<< " start time " << start_time_ << std::endl;
         } else {
-            std::cout << "call end error";
+            std::cout << status.error_message() << std::endl;
         }
         delete this;
       }
@@ -144,7 +133,6 @@ class AsyncClientCallDirect {
     ::grpc::ByteBuffer request_buf_;
     ClientContext context_;
     std::unique_ptr<::grpc::GenericClientAsyncReaderWriter> call_;
-    int64_t start_time_;
 
     std::mutex mu_;
     std::condition_variable cond_;
