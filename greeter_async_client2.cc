@@ -19,6 +19,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <sys/time.h>
 
 #include <grpc++/grpc++.h>
 #include <grpc/support/log.h>
@@ -51,7 +52,12 @@ class GreeterClient {
 
     // Assembles the client's payload and sends it to the server.
     void SayHello(const std::string& user) {
-        void* payload_alloc = GenPayload(1024*1024*200);
+        const int size = 12 * 1024 * 1024;
+        char* payload_alloc = (char*)GenPayload(size);
+
+        struct timeval t0_copy, t1_copy;
+        gettimeofday(&t0_copy, 0);
+        //std::string pay_load(payload_alloc, size);
 
         // Call object to store rpc data
         AsyncClientCall* call = new AsyncClientCall;
@@ -60,7 +66,13 @@ class GreeterClient {
         // Data we are sending to the server.
         HelloRequest request;
         request.set_name(user);
-        request.set_payload(*reinterpret_cast<std::string*>(payload_alloc));
+        request.set_payload(payload_alloc, size);
+
+        gettimeofday(&t1_copy, 0);
+        double dif = double((t1_copy.tv_sec - t0_copy.tv_sec) * 1000.0 +
+                         (t1_copy.tv_usec - t0_copy.tv_usec) / 1000.0);
+        printf("time is %.2f ms\n", dif);
+
         // auto* pl = request.mutable_payload();
         // pl = reinterpret_cast<std::string*>(payload_alloc);
         free(payload_alloc);
@@ -150,8 +162,15 @@ int main(int argc, char** argv) {
     // are created. This channel models a connection to an endpoint (in this case,
     // localhost at port 50051). We indicate that the channel isn't authenticated
     // (use of InsecureChannelCredentials()).
-    GreeterClient greeter(grpc::CreateChannel(
-            "localhost:50051", grpc::InsecureChannelCredentials()));
+    grpc::ChannelArguments args;
+    args.SetMaxSendMessageSize(std::numeric_limits<int>::max());
+    args.SetMaxReceiveMessageSize(std::numeric_limits<int>::max());
+
+    auto ch = std::shared_ptr<grpc::Channel>( grpc::CreateCustomChannel("127.0.0.1:50051", grpc::InsecureChannelCredentials(), args));
+
+    //GreeterClient greeter(grpc::CreateChannel(
+    //        "localhost:50051", grpc::InsecureChannelCredentials()));
+    GreeterClient greeter(ch);
 
     // Spawn reader thread that loops indefinitely
     std::thread thread_ = std::thread(&GreeterClient::AsyncCompleteRpc, &greeter);
