@@ -31,6 +31,7 @@
 #include "helloworld.grpc.pb.h"
 
 #include "grpc_util.h"
+#include "proto_encode_helper.h"
 
 using grpc::Channel;
 using grpc::ClientAsyncResponseReader;
@@ -72,6 +73,38 @@ bool GrpcParseProto(const grpc::ByteBuffer& src, HelloReply* dst) {
   return dst->ParseFromZeroCopyStream(&stream);
 }
 
+void GenRequestByteBuffer(const std::string& user,
+                          char* payload,
+                          int size,
+                          ::grpc::ByteBuffer *result) {
+    HelloRequest request;
+    std::string header;
+    request.AppendToString(&header);
+
+    void* buf = malloc(128);
+    ProtoEncodeHelper e((char*)buf, 128);
+    e.WriteRawBytes(header);  // protobuf header
+    // e.WriteVarlengthBeginning(1, user.size() + size);
+    e.WriteString(1, user);
+    e.WriteVarlengthBeginning(2, size);
+
+    ::grpc::Slice slices[2];  // name and payload
+    slices[0] = ::grpc::Slice(e.size());
+    memcpy(const_cast<uint8_t*>(slices[0].begin()), e.data(), e.size());
+    slices[1] = ::grpc::Slice(
+        grpc_slice_new_with_user_data(
+              const_cast<void*>(static_cast<const void*>(payload)),
+              size,
+              [](void* backing) {
+                // static_cast<TensorBuffer*>(backing)->Unref();
+              },
+              const_cast<char*>(payload)),
+        ::grpc::Slice::STEAL_REF);
+    ::grpc::ByteBuffer tmp(&slices[0], 2);
+    result->Swap(&tmp);
+    std::cout << "piled buffer " << result->Length();
+}
+
 
 class AsyncClientCallDirect {
  public:
@@ -83,17 +116,18 @@ class AsyncClientCallDirect {
     char* payload_alloc = (char*)GenPayload(size);
 
     double ts = GetTimestamp();
-    HelloRequest request;
-    request.set_name(user);
-    // This will copy, 
-    request.set_allocated_payload(reinterpret_cast<std::string*>(payload_alloc));
+    // HelloRequest request;
+    // request.set_name(user);
+    // // This will copy
+    // request.set_allocated_payload(reinterpret_cast<std::string*>(payload_alloc));
     // auto* pl = request.mutable_payload();
     // this have no affect
     // pl = reinterpret_cast<std::string*>(payload_alloc);
-    RequestToByteBuffer(request, &request_buf_);
+    // RequestToByteBuffer(request, &request_buf_);
+    ::grpc::ByteBuffer request;
+    GenRequestByteBuffer(user, payload_alloc, size, &request_buf_);
     printf("time is %.2f ms\n", GetTimestamp() - ts);
 
-    
     call_ = std::move(stub->Call(&context_, "/helloworld.Greeter/SayHello", cq, this));
     call_times = 0;
     {
