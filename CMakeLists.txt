@@ -22,7 +22,7 @@ get_target_property(gRPC_CPP_PLUGIN_EXECUTABLE gRPC::grpc_cpp_plugin
     IMPORTED_LOCATION_RELEASE)
 
 # Proto file
-get_filename_component(hw_proto "helloworld.proto" ABSOLUTE)
+get_filename_component(hw_proto "../../protos/helloworld.proto" ABSOLUTE)
 get_filename_component(hw_proto_path "${hw_proto}" PATH)
 
 # Generated sources
