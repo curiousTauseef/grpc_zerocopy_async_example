@@ -83,7 +83,6 @@ void GenRequestByteBuffer(const std::string& user,
     void* buf = malloc(512);
     ProtoEncodeHelper e((char*)buf, 512);
     e.WriteRawBytes(header);  // protobuf header
-    // e.WriteVarlengthBeginning(1, user.size() + size);
     e.WriteString(1, user);
     e.WriteVarlengthBeginning(2, size);
 
@@ -95,7 +94,7 @@ void GenRequestByteBuffer(const std::string& user,
               const_cast<void*>(static_cast<const void*>(payload)),
               size,
               [](void* backing) {
-                // static_cast<TensorBuffer*>(backing)->Unref();
+                free(backing);
               },
               const_cast<char*>(payload)),
         ::grpc::Slice::STEAL_REF);
@@ -115,35 +114,19 @@ class AsyncClientCallDirect {
     char* payload_alloc = (char*)GenPayload(size);
 
     double ts = GetTimestamp();
-    // HelloRequest request;
-    // request.set_name(user);
-    // // This will copy
-    // request.set_allocated_payload(reinterpret_cast<std::string*>(payload_alloc));
-    // auto* pl = request.mutable_payload();
-    // this have no affect
-    // pl = reinterpret_cast<std::string*>(payload_alloc);
-    // RequestToByteBuffer(request, &request_buf_);
     ::grpc::ByteBuffer request;
     GenRequestByteBuffer(user, payload_alloc, size, &request_buf_);
     printf("time is %.2f ms\n", GetTimestamp() - ts);
+    // add this line if needed.
     // context_.set_deadline(gpr_time_from_millis(200, GPR_TIMESPAN));
 
-    // call_ = std::move(stub->Call(&context_, "/helloworld.Greeter/SayHello", cq, this));
     call_ =
         std::move(stub->PrepareUnaryCall(&context_,
             "/helloworld.Greeter/SayHello", request_buf_, cq));
     call_->StartCall();
     call_->Finish(&response_buf_, &status, this);
-
-    call_times = 0;
-    // {
-    //     std::lock_guard<std::mutex> lock(mu_);
-    //     call_cond_ = 1;
-    // }
-    // cond_.notify_one();
   }
   void OnComplete(bool ok) {
-    std::cout << "call times: " << call_times << std::endl;
     if (status.ok()) {
         HelloReply reply;
         GrpcParseProto(response_buf_, &reply);
@@ -153,35 +136,13 @@ class AsyncClientCallDirect {
                   << " " << status.error_details()
                   << std::endl;
     }
-    call_times++;
     delete this;
-    //   if (call_times == 0) {
-    //     std::unique_lock<std::mutex> lock(mu_);
-    //     cond_.wait(lock, [this]{return this->call_cond_ == 1;});
-    //     if (ok) {
-    //         call_->Write(request_buf_, this);
-    //         call_->Read(&response_buf_, this);
-    //     }
-    //     call_->Finish(&status, this);
-    //     lock.unlock();
-    //   } else if (call_times == 3) {
-    //     // parse response_buf_
-    //     if (status.ok()) {
-    //         HelloReply reply;
-    //         GrpcParseProto(response_buf_, &reply);
-    //     } else {
-    //         std::cout << status.error_message() << std::endl;
-    //     }
-    //     delete this;
-    //   }
-      
   }
   Status status;
   HelloReply reply;
   ::grpc::ByteBuffer response_buf_;
 
  private:
-    std::atomic<int> call_times;
     ::grpc::ByteBuffer request_buf_;
     ClientContext context_;
     // std::unique_ptr<::grpc::GenericClientAsyncReaderWriter> call_;
@@ -241,8 +202,6 @@ int main(int argc, char** argv) {
     args.SetInt("grpc.testing.fixed_reconnect_backoff_ms", 1000);
     args.SetMaxSendMessageSize(std::numeric_limits<int>::max());
     args.SetMaxReceiveMessageSize(std::numeric_limits<int>::max());
-    // GreeterClient greeter(grpc::CreateChannel(
-    //         "localhost:50051", grpc::InsecureChannelCredentials()));
     GreeterClient greeter(::grpc::CreateCustomChannel(
         "dns:///localhost:50051", ::grpc::InsecureChannelCredentials(), args));
 
