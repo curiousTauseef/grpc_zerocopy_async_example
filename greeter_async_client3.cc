@@ -43,11 +43,10 @@ using helloworld::HelloReply;
 using helloworld::Greeter;
 
 void* GenPayload(const size_t size) {
-    std::string* ret = new std::string();
-    ret->reserve(size);
-    std::cout << "alloc " << ret->capacity() << std::endl;
-    for (int i=0; i<size; ++i) ret->append("x");
-    return ret;
+    char* ret = (char*)malloc(size);
+    std::cout << "alloc " << size << std::endl;
+    for (int i=0; i<size; ++i) ret[i] = 'x';
+    return (void*)ret;
 }
 
 void RequestToByteBuffer(const HelloRequest& proto,
@@ -81,8 +80,8 @@ void GenRequestByteBuffer(const std::string& user,
     std::string header;
     request.AppendToString(&header);
 
-    void* buf = malloc(128);
-    ProtoEncodeHelper e((char*)buf, 128);
+    void* buf = malloc(512);
+    ProtoEncodeHelper e((char*)buf, 512);
     e.WriteRawBytes(header);  // protobuf header
     // e.WriteVarlengthBeginning(1, user.size() + size);
     e.WriteString(1, user);
@@ -112,7 +111,7 @@ class AsyncClientCallDirect {
                         ::grpc::CompletionQueue* cq,
                         ::grpc::GenericStub* stub) {
     // encode a message directly
-    const int size = 3 * 1024 * 1024;
+    const int size = 1 * 1024 * 1024;
     char* payload_alloc = (char*)GenPayload(size);
 
     double ts = GetTimestamp();
@@ -127,36 +126,55 @@ class AsyncClientCallDirect {
     ::grpc::ByteBuffer request;
     GenRequestByteBuffer(user, payload_alloc, size, &request_buf_);
     printf("time is %.2f ms\n", GetTimestamp() - ts);
+    // context_.set_deadline(gpr_time_from_millis(200, GPR_TIMESPAN));
 
-    call_ = std::move(stub->Call(&context_, "/helloworld.Greeter/SayHello", cq, this));
+    // call_ = std::move(stub->Call(&context_, "/helloworld.Greeter/SayHello", cq, this));
+    call_ =
+        std::move(stub->PrepareUnaryCall(&context_,
+            "/helloworld.Greeter/SayHello", request_buf_, cq));
+    call_->StartCall();
+    call_->Finish(&response_buf_, &status, this);
+
     call_times = 0;
-    {
-        std::lock_guard<std::mutex> lock(mu_);
-        call_cond_ = 1;
-    }
-    cond_.notify_one();
+    // {
+    //     std::lock_guard<std::mutex> lock(mu_);
+    //     call_cond_ = 1;
+    // }
+    // cond_.notify_one();
   }
   void OnComplete(bool ok) {
-      if (call_times == 0) {
-        std::unique_lock<std::mutex> lock(mu_);
-        cond_.wait(lock, [this]{return this->call_cond_ == 1;});
-        if (ok) {
-            call_->Write(request_buf_, this);
-            call_->Read(&response_buf_, this);
-        }
-        call_->Finish(&status, this);
-        lock.unlock();
-      } else if (call_times == 3) {
-        // parse response_buf_
-        if (status.ok()) {
-            HelloReply reply;
-            GrpcParseProto(response_buf_, &reply);
-        } else {
-            std::cout << status.error_message() << std::endl;
-        }
-        delete this;
-      }
-      call_times++;
+    std::cout << "call times: " << call_times << std::endl;
+    if (status.ok()) {
+        HelloReply reply;
+        GrpcParseProto(response_buf_, &reply);
+    } else {
+        std::cout << status.error_message()
+                  << " " << status.error_code()
+                  << " " << status.error_details()
+                  << std::endl;
+    }
+    call_times++;
+    delete this;
+    //   if (call_times == 0) {
+    //     std::unique_lock<std::mutex> lock(mu_);
+    //     cond_.wait(lock, [this]{return this->call_cond_ == 1;});
+    //     if (ok) {
+    //         call_->Write(request_buf_, this);
+    //         call_->Read(&response_buf_, this);
+    //     }
+    //     call_->Finish(&status, this);
+    //     lock.unlock();
+    //   } else if (call_times == 3) {
+    //     // parse response_buf_
+    //     if (status.ok()) {
+    //         HelloReply reply;
+    //         GrpcParseProto(response_buf_, &reply);
+    //     } else {
+    //         std::cout << status.error_message() << std::endl;
+    //     }
+    //     delete this;
+    //   }
+      
   }
   Status status;
   HelloReply reply;
@@ -166,7 +184,8 @@ class AsyncClientCallDirect {
     std::atomic<int> call_times;
     ::grpc::ByteBuffer request_buf_;
     ClientContext context_;
-    std::unique_ptr<::grpc::GenericClientAsyncReaderWriter> call_;
+    // std::unique_ptr<::grpc::GenericClientAsyncReaderWriter> call_;
+    std::unique_ptr<::grpc::GenericClientAsyncResponseReader> call_;
 
     std::mutex mu_;
     std::condition_variable cond_;
@@ -180,7 +199,7 @@ class GreeterClient {
             : stub_(Greeter::NewStub(channel)), g_stub_(channel) {}
 
     void SayHelloDirect(const std::string& user) {
-        AsyncClientCallDirect* call = new AsyncClientCallDirect(user, &cq_, &g_stub_);
+        new AsyncClientCallDirect(user, &cq_, &g_stub_);
     }
 
     // Loop while listening for completed responses.
@@ -218,8 +237,14 @@ int main(int argc, char** argv) {
     // are created. This channel models a connection to an endpoint (in this case,
     // localhost at port 50051). We indicate that the channel isn't authenticated
     // (use of InsecureChannelCredentials()).
-    GreeterClient greeter(grpc::CreateChannel(
-            "localhost:50051", grpc::InsecureChannelCredentials()));
+    ::grpc::ChannelArguments args;
+    args.SetInt("grpc.testing.fixed_reconnect_backoff_ms", 1000);
+    args.SetMaxSendMessageSize(std::numeric_limits<int>::max());
+    args.SetMaxReceiveMessageSize(std::numeric_limits<int>::max());
+    // GreeterClient greeter(grpc::CreateChannel(
+    //         "localhost:50051", grpc::InsecureChannelCredentials()));
+    GreeterClient greeter(::grpc::CreateCustomChannel(
+        "dns:///localhost:50051", ::grpc::InsecureChannelCredentials(), args));
 
     // Spawn reader thread that loops indefinitely
     std::thread thread_ = std::thread(&GreeterClient::AsyncCompleteRpc, &greeter);
